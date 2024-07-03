@@ -1,120 +1,149 @@
-import fs from 'fs';
+import { MODEL_CARTS } from "../../models/cart.model.js";
+import { MODEL_PRODUCTS } from "../../models/product.model.js";
+import { MODEL_TICKETS } from "../../models/ticket.model.js";
+import { logger } from "../../config/logger_CUSTOM.js";
 
-export default class ProductManager {
-    constructor(path) {
-        this.path = path;
+export default class CartManager {
+
+    async addCart() {
+        try {
+            const newCart = {
+                products: []
+            };
+            const result = await MODEL_CARTS.create(newCart);
+            return { code: 200, status: `Carrito agregado con id: ${result.id}` };
+        } catch (error) {
+            logger.error(error);
+        }
     }
 
-    isCodeUnique = async code => {
+    async getCarts() {
         try {
-            const products = await this.getProducts();
-            return products.some((product) => product.code === code);
+            const carts = await MODEL_CARTS.find();
+            return carts.map(cart => cart.toObject());
+        } catch (error) {
+            logger.error(error);
+        }
+    }
+
+    async getProductsOfCartById(id) {
+        try {
+            const cart = await MODEL_CARTS.findById(id).populate('products.product');
+            return cart ? cart.products : false;
+        } catch (error) {
+            logger.error(error);
+        }
+    }
+
+    async addProductToCart(cid, pid) {
+        try {
+            const cart = await MODEL_CARTS.findById(cid);
+            if (!cart) {
+                return { code: 404, status: 'carrito no encontrado' };
+            }
+            const productExist = cart.products.find(product => product.product.equals(pid));
+            if (productExist) {
+                productExist.quantity += 1;
+            } else {
+                cart.products.push({ product: pid, quantity: 1 });
+            }
+            await cart.save();
+            return { code: 200, status: 'producto agregado al carrito' };
+        } catch (error) {
+            logger.error(error);
+        }
+    }
+
+    async removeProductFromCart(cid, pid) {
+        try {
+            const result = await MODEL_CARTS.updateOne(
+                { _id: cid },
+                { $pull: { products: { product: pid } } }
+            );
+            if (result.acknowledged === true) {
+                return { code: 200, status: 'Producto eliminado del carrito' };
+            }
+            return { code: 404, status: 'Producto no encontrado en el carrito' };
         } catch (error) {
             logger.error(error);
         }
     }
     
-    validateFields(product) {
-        return (
-          product.hasOwnProperty('title') &&
-          product.hasOwnProperty('description') &&
-          product.hasOwnProperty('price') &&
-          product.hasOwnProperty('status') &&
-          product.hasOwnProperty('code') &&
-          product.hasOwnProperty('stock') &&
-          product.hasOwnProperty('category') &&
-          typeof product.title === 'string' &&
-          typeof product.description === 'string' &&
-          typeof product.price === 'number' &&
-          typeof product.status === 'boolean' &&
-          typeof product.code === 'string' &&
-          typeof product.stock === 'number' &&
-          typeof product.category === 'string'
-        );
-    }
-
-    writeFile = async data => {
+    async updateCart(cid, products) {
         try {
-            await fs.promises.writeFile(this.path, JSON.stringify(data, null, 2));
+            const result = await MODEL_CARTS.updateOne(
+                { _id: cid },
+                { products: products }
+            );
+            if (result.acknowledged === true) {
+                return { code: 200, status: 'Carrito actualizado exitosamente' };
+            }
+            return { code: 404, status: 'Carrito no encontrado' };
+        } catch (error) {
+            logger.error(error);
+        }
+    }
+    
+    async updateProductQuantity(cid, pid, quantity) {
+        try {
+            logger.debug(`cid: ${cid}, pid: ${pid}, quantity: ${quantity}`);
+            const result = await MODEL_CARTS.updateOne(
+                { _id: cid, 'products.product': pid },
+                { $set: { 'products.$.quantity': quantity } }
+            );
+            if (result.acknowledged === true) {
+                return { code: 200, status: 'Cantidad de producto actualizada' };
+            }
+            return { code: 404, status: 'Producto no encontrado en el carrito' };
         } catch (error) {
             logger.error(error);
         }
     }
 
-    addProduct = async product => {
+    async removeAllProductsFromCart(cid) {
         try {
-            if(await this.isCodeUnique(product.code)) {
-                return {code: 409, status: 'Este producto ya existe'};
+            const result = await MODEL_CARTS.updateOne(
+                { _id: cid },
+                { products: [] }
+            );
+            if (result.acknowledged === true) {
+                return { code: 200, status: 'Todos los productos han sido eliminados del carrito' };
             }
-            if(!this.validateFields(product)) {
-                return {code: 400, status: 'Todos los campos del producto deben ser ingresados'};
-            }
-            let products = await this.getProducts();
-            const newProduct = {
-                ...product,
-                id: products.length > 0 ? products[products.length - 1].id + 1 : 1
-            }
-            products.push(newProduct);
-            await this.writeFile(products);
-            return {code: 200, status: 'Producto agregado', product: newProduct};
+            return { code: 404, status: 'Carrito no encontrado' };
         } catch (error) {
             logger.error(error);
         }
     }
 
-    getProducts = async() => {
+    async getCartById(cid) {
         try {
-            const products = await fs.promises.readFile(this.path, 'utf-8');
-            return JSON.parse(products);
-        } catch (error) {
-            if(error.message.includes('no such file or directory')) return [];
-            logger.error(error);
-        }
-    }
-
-    getProductById = async id => {
-        const products = await this.getProducts();
-        try {
-            const product = products.find(product => product.id === id);
-            return product ? product : false;
+            const cart = await MODEL_CARTS.findById(cid).populate('products.product');
+            return cart;
         } catch (error) {
             logger.error(error);
         }
     }
 
-    deleteProductById = async id => {
-        const products = await this.getProducts();
+    async updateProduct(productId, productData) {
+        logger.info(productData)
         try {
-            const product = await this.getProductById(id);
-            if(product) {
-                const newProducts = products.filter(product => product.id !== id);
-                await this.writeFile(newProducts);
-                return {code: 200, status: 'Producto eliminado'};
-            }else {
-                return {code: 404, status: 'Producto no existe'};
+            const result = await MODEL_PRODUCTS.updateOne({ _id: productId }, { $set: { stock: productData.stock } });
+            if (result.acknowledged === true) {
+                return { code: 200, status: 'Producto actualizado en el carrito' };
             }
+            return { code: 404, status: 'Producto no encontrado en el carrito' };
         } catch (error) {
             logger.error(error);
         }
     }
 
-    updateProduct = async (id, updatedFields) => {
-        let products = await this.getProducts();
+    async createTicket(ticketData) {
         try {
-            const product = await this.getProductById(id);
-            if(product) {
-                const productIndex = products.findIndex((product) => product.id === id);
-                products[productIndex] = {
-                    ...products[productIndex],
-                    ...updatedFields
-                }
-                await this.writeFile(products);
-                return {code: 200, status: 'Producto actualizado'};
-            } else {
-                return {code: 404, status: 'Producto no encontrado'};
-            }
+            const result = await MODEL_TICKETS.create(ticketData);
+            return { code: 200, status: 'Ticket creado', ticket: result };
         } catch (error) {
             logger.error(error);
+            return { code: 500, status: 'Ocurrió un error al crear el ticket' };
         }
     }
 }
